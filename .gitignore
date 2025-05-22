@@ -1,0 +1,22 @@
+# Aptos Move build artifacts
+/build/
+Move.lock
+
+# Aptos CLI local config
+.aptos/
+
+# Environment config
+.env
+.env.*
+
+# OS 및 IDE 관련
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.log
+npm-debug.log*
+
+# Node 관련 (만약 frontend나 scripts가 포함되어 있다면)
+node_modules/
+dist/
