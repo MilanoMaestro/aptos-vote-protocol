@@ -20,7 +20,7 @@ module tests::vote_test {
     fun create_test_fungible_asset(
         creator: &signer
     ): (object::ConstructorRef, object::Object<Metadata>) {
-        let constructor = object::create_named_object(creator, b"TOKEN_A");
+        let constructor = object::create_named_object(creator, b"TEST_TOKEN");
         primary_fungible_store::create_primary_store_enabled_fungible_asset(
             &constructor,
             option::none(),
@@ -75,7 +75,6 @@ module tests::vote_test {
             reward_per_person,
             reward_max_winners,
             option_texts,
-            _,
             reward_store_balance
         ) = protocol::get_vote_info(0);
 
@@ -207,11 +206,10 @@ module tests::vote_test {
             start_at,
             end_at,
             reward_rule,
-            reward_token_after,
+            reward_TEST_TOKENfter,
             reward_per_person,
             reward_max_winners,
             option_texts,
-            _,
             reward_store_balance
         ) = protocol::get_vote_info(0);
 
@@ -220,7 +218,7 @@ module tests::vote_test {
         assert!(start_at == 100, 202);
         assert!(end_at == 300, 203);
         assert!(reward_rule == 1, 204); // WINNER
-        assert!(reward_token_after == token, 205);
+        assert!(reward_TEST_TOKENfter == token, 205);
         assert!(reward_per_person == 600, 206);
         assert!(reward_max_winners == 4, 207);
         assert!(vector::length(&option_texts) == 2, 208);
@@ -659,5 +657,82 @@ module tests::vote_test {
         assert!(user1_balance == 50, 1301);
         assert!(user2_balance == 50, 1302);
         assert!(user3_balance == 0, 1303);
+    }
+
+    #[test(admin = @vote, user1 = @0x2, user2 = @0x3, framework = @0x1)]
+    fun test_vote_info_action_grouping(
+        admin: &signer, user1: &signer, user2: &signer, framework: &signer
+    ) {
+        timestamp::set_time_has_started_for_testing(framework);
+        timestamp::update_global_time_for_test_secs(1);
+        protocol::init(admin);
+
+        let (constructor, token) = create_test_fungible_asset(admin);
+        let mint_ref = fungible_asset::generate_mint_ref(&constructor);
+        let minted = fungible_asset::mint(&mint_ref, 100);
+        fungible_asset::deposit(
+            primary_fungible_store::ensure_primary_store_exists(signer::address_of(admin), token),
+            minted
+        );
+
+        timestamp::update_global_time_for_test_secs(10);
+        let options = vector[string::utf8(b"A"), string::utf8(b"B")];
+        protocol::create_vote(
+            admin, 0, string::utf8(b"Test Grouping"),
+            10, 50, 0, token, 10, 10, options
+        );
+
+        timestamp::update_global_time_for_test_secs(15);
+        protocol::submit_vote(user1, 0, 0);
+        protocol::submit_vote(user2, 0, 1);
+
+        let (voters_0, timestamps_0) = protocol::get_vote_option_actions(0, 0);
+        let (voters_1, timestamps_1) = protocol::get_vote_option_actions(0, 1);
+
+        assert!(vector::length(&voters_0) == 1, 100);
+        assert!(vector::length(&timestamps_0) == 1, 101);
+        assert!(vector::length(&voters_1) == 1, 102);
+        assert!(vector::length(&timestamps_1) == 1, 103);
+
+        assert!(*vector::borrow(&voters_0, 0) == signer::address_of(user1), 110);
+        assert!(*vector::borrow(&voters_1, 0) == signer::address_of(user2), 111);
+    }
+
+    #[test(admin = @vote, user1 = @0x2, framework = @0x1)]
+    fun test_finalize_vote_internal_state_change(
+        admin: &signer, user1: &signer, framework: &signer
+    ) {
+        timestamp::set_time_has_started_for_testing(framework);
+        timestamp::update_global_time_for_test_secs(1);
+        protocol::init(admin);
+
+        let (constructor, token) = create_test_fungible_asset(admin);
+        let mint_ref = fungible_asset::generate_mint_ref(&constructor);
+        let minted = fungible_asset::mint(&mint_ref, 100);
+        let admin_store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(admin), token);
+        fungible_asset::deposit(admin_store, minted);
+
+        timestamp::update_global_time_for_test_secs(10);
+        let options = vector[string::utf8(b"A")];
+        protocol::create_vote(
+            admin, 0, string::utf8(b"Finalize Test"),
+            10, 20, 0, token, 50, 1, options
+        );
+
+        timestamp::update_global_time_for_test_secs(15);
+        protocol::submit_vote(user1, 0, 0);
+
+        timestamp::update_global_time_for_test_secs(25);
+        protocol::finalize_vote(admin, 0);
+
+        let user1_store =
+            primary_fungible_store::ensure_primary_store_exists(signer::address_of(user1), token);
+        let user1_balance = fungible_asset::balance(user1_store);
+
+        let admin_balance = fungible_asset::balance(admin_store);
+
+        // One voter rewarded 50, remaining 0 should be refunded.
+        assert!(user1_balance == 50, 200);
+        assert!(admin_balance == 50, 201); // Total reward = 50, refunded 0
     }
 }

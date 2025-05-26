@@ -9,6 +9,7 @@ module vote::protocol {
     use aptos_framework::fungible_asset::{Self, FungibleStore, Metadata};
     use aptos_framework::primary_fungible_store;
     use aptos_framework::object::{Self, Object, ExtendRef};
+    use aptos_framework::event;
 
     // Address where the module is deployed
     const MODULE_ADDR: address = @vote;
@@ -29,6 +30,45 @@ module vote::protocol {
         FIFO, // reward given to first N voters
         WINNER // reward given to voters who chose winning option(s)
         // CUSTOM rules can be added later for more advanced reward strategies
+    }
+
+    #[event]
+    struct VoteCreatedEvent has drop, store {
+        vote_idx: u64,
+        creator: address,
+        title: string::String,
+        timestamp: u64,
+    }
+
+    #[event]
+    struct VoteEditedEvent has drop, store {
+        vote_idx: u64,
+        editor: address,
+        title: string::String,
+        timestamp: u64,
+    }
+
+    #[event]
+    struct VoteSubmittedEvent has drop, store {
+        vote_idx: u64,
+        voter: address,
+        option_idx: u64,
+        timestamp: u64,
+    }
+
+    #[event]
+    struct VoteFinalizedEvent has drop, store {
+        vote_idx: u64,
+        caller: address,
+        timestamp: u64
+    }
+
+    #[event]
+    struct RefundRewardEvent has drop, store {
+        vote_idx: u64,
+        refunded_to: address,
+        amount: u64,
+        timestamp: u64
     }
 
     // Stores admin config for the vote module
@@ -185,13 +225,19 @@ module vote::protocol {
         vector::push_back(&mut vote_store.votes, vote);
         vote_store.next_vote_idx = vote_idx + 1;
 
+        event::emit(VoteCreatedEvent {
+            vote_idx,
+            creator: caller_addr,
+            title,
+            timestamp: timestamp::now_seconds()
+        });
         // Finalize any expired votes at the time of creation
         let i = 0;
         let now = timestamp::now_seconds();
         while (i < vector::length(&vote_store.votes)) {
             let vote_ref_mut = vector::borrow_mut(&mut vote_store.votes, i);
             if (!vote_ref_mut.is_finalized && vote_ref_mut.end_at < now) {
-                finalize_vote_internal(vote_ref_mut);
+                finalize_vote_internal(vote_ref_mut, i);
             };
             i = i + 1;
         };
@@ -210,29 +256,17 @@ module vote::protocol {
         u64, // reward_per_person
         u64, // reward_max_winners
         vector<string::String>, // option texts
-        vector<vector<VoteSubmitAction>>, // option actions by option
         u64 // reward_token_store balance
     ) acquires VoteStore {
         let vote_store = borrow_global<VoteStore>(MODULE_ADDR);
         let vote_ref = vector::borrow(&vote_store.votes, vote_idx);
 
         let options = vector::empty<string::String>();
-        let submit_actions = vector::empty<vector<VoteSubmitAction>>();
-
         let i = 0;
         while (i < vector::length(&vote_ref.options)) {
             let opt = vector::borrow(&vote_ref.options, i);
             vector::push_back(&mut options, opt.text);
-            vector::push_back(&mut submit_actions, vector::empty<VoteSubmitAction>());
             i = i + 1;
-        };
-        let j = 0;
-        while (j < vector::length(&vote_ref.actions)) {
-            let action = vector::borrow(&vote_ref.actions, j);
-            let opt_idx = action.option_idx;
-            let action_vector = vector::borrow_mut(&mut submit_actions, opt_idx);
-            vector::push_back(action_vector, *action);
-            j = j + 1;
         };
 
         let reward_rule_num =
@@ -251,9 +285,32 @@ module vote::protocol {
             vote_ref.reward_per_person,
             vote_ref.reward_max_winners,
             options,
-            submit_actions,
             reward_store_balance
         )
+    }
+
+    #[view]
+    public fun get_vote_option_actions(
+        vote_idx: u64,
+        option_idx: u64
+    ): (vector<address>, vector<u64>) acquires VoteStore {
+        let vote_store = borrow_global<VoteStore>(MODULE_ADDR);
+        let vote_ref = vector::borrow(&vote_store.votes, vote_idx);
+
+        let voters = vector::empty<address>();
+        let timestamps = vector::empty<u64>();
+
+        let i = 0;
+        while (i < vector::length(&vote_ref.actions)) {
+            let action = vector::borrow(&vote_ref.actions, i);
+            if (action.option_idx == option_idx) {
+                vector::push_back(&mut voters, action.voter);
+                vector::push_back(&mut timestamps, action.timestamp);
+            };
+            i = i + 1;
+        };
+
+        (voters, timestamps)
     }
 
     // Edits an existing vote's metadata and reward configuration before it starts
@@ -333,6 +390,13 @@ module vote::protocol {
         vote_ref.reward_rule = match_reward_rule(reward_rule);
         vote_ref.reward_per_person = reward_per_person;
         vote_ref.reward_max_winners = reward_max_winners;
+
+        event::emit(VoteEditedEvent {
+            vote_idx,
+            editor: signer_addr,
+            title,
+            timestamp: timestamp::now_seconds()
+        });
     }
 
     // Utility function to check if a vote ID exists in a list of submitted votes
@@ -382,6 +446,13 @@ module vote::protocol {
             VoteSubmitAction { voter: voter_addr, option_idx, timestamp: now }
         );
         vector::push_back(&mut store.submitted, vote_idx);
+
+        event::emit(VoteSubmittedEvent {
+            vote_idx,
+            voter: voter_addr,
+            option_idx,
+            timestamp: now
+        });
     }
 
     // Public function to finalize a vote (can be triggered by the vote creator)
@@ -398,15 +469,22 @@ module vote::protocol {
 
         let now = timestamp::now_seconds();
         vote_ref.end_at = now;
-        finalize_vote_internal(vote_ref);
+        finalize_vote_internal(vote_ref, vote_idx);
+
+        // Emit VoteFinalizedEvent
+        event::emit(VoteFinalizedEvent {
+            vote_idx,
+            caller: signer_addr,
+            timestamp: now
+        });
     }
 
     // Internal function to finalize a vote
-    fun finalize_vote_internal(vote_ref: &mut Vote) {
+    fun finalize_vote_internal(vote_ref: &mut Vote, vote_idx: u64) {
         assert!(!vote_ref.is_finalized, error::invalid_state(100));
         distribute_reward(vote_ref);
         vote_ref.is_finalized = true;
-        refund_remaining_reward(vote_ref);
+        refund_remaining_reward(vote_ref, vote_idx);
     }
 
     // Distributes reward tokens to eligible voters based on the reward rule
@@ -443,7 +521,7 @@ module vote::protocol {
             let max_votes = find_max_vote_count(&vote_ref.options);
 
             let i = 0;
-            while (i < vector::length(&vote_ref.options) && distributed < max_winners) {
+            while (i < vector::length(&vote_ref.actions) && distributed < max_winners) {
                 let action = vector::borrow(&vote_ref.actions, i);
                 let option_idx = action.option_idx;
                 let option_ref = vector::borrow(&vote_ref.options, option_idx);
@@ -477,7 +555,7 @@ module vote::protocol {
         max_votes
     }
 
-    fun refund_remaining_reward(vote_ref: &Vote) {
+    fun refund_remaining_reward(vote_ref: &Vote, vote_idx: u64) {
         let reward_token = vote_ref.reward_token;
         let store = vote_ref.reward_token_store;
         let store_signer =
@@ -491,6 +569,13 @@ module vote::protocol {
                     vote_ref.creator, reward_token
                 );
             fungible_asset::deposit(to_store, reward);
+
+            event::emit(RefundRewardEvent {
+                vote_idx,
+                refunded_to: vote_ref.creator,
+                amount: remaining,
+                timestamp: timestamp::now_seconds()
+            });
         };
     }
 }
