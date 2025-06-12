@@ -11,4 +11,4 @@ aptos_std = "0x1"
 aptos_framework = "0x1"
 
 [dependencies]
-AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", rev = "main", subdir = "aptos-move/framework/aptos-framework" }
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", rev = "fac9b40330ac7607179d95385992ef4903bd34c9", subdir = "aptos-move/framework/aptos-framework" }

@@ -23,7 +23,7 @@ aptos_framework = "0x1"
 [dependencies]
 AptosFramework = {
   git = "https://github.com/aptos-labs/aptos-core.git",
-  rev = "main",
+  rev = "fac9b40330ac7607179d95385992ef4903bd34c9"  //1.30 Release on Jun 12, 2025
   subdir = "aptos-move/framework/aptos-framework"
 }
 ```
@@ -57,6 +57,19 @@ AptosFramework = {
   - `FIFO` (0): First-come-first-served
   - `WINNER` (1): Rewards all voters who chose the most-voted option(s), capped by `max_winners`
   - **TODO** This enum can be extended for custom reward strategies
+
+---
+
+## ⏱️ Reward Distribution Timing
+
+The timing of reward distribution depends on the configured `RewardRule`:
+
+| RewardRule | Distribution Time       | Description                                                                                                                               |
+| ---------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `FIFO`     | **Immediately** on vote | The first `max_winners` voters receive rewards directly at the time of voting. Later votes are still accepted but do not receive rewards. |
+| `WINNER`   | **Upon finalization**   | Rewards are distributed only after calling `finalize_vote`, to voters who selected the most popular option(s), up to `max_winners`.       |
+
+> Reward tokens are pre-funded when creating a vote and refunded if unused.
 
 ---
 
@@ -95,9 +108,8 @@ AptosFramework = {
   Sets a new protocol admin. Only callable by current admin.
 
 - **`create_vote(...)`**
-  Creates a new vote with metadata, options, and reward configuration.
+  Creates a new vote and locks reward tokens into the protocol.
   Allocates reward tokens by withdrawing them into a dedicated reward store.
-  Additionally, finalizes any expired but unfinalized past votes before creating a new one (due to on-chain constraints).
   Note: `start_at` must be earlier than `end_at`.
 
 - **`edit_vote(...)`**
@@ -132,10 +144,10 @@ Test coverage includes:
 
 - Basic vote creation and info retrieval
 - Editing before start time with reward diff adjustment
-- Submitting votes (valid and invalid paths)
-- Finalization with reward distribution
-- Winner vs FIFO logic
-- Negative tests with `#[expected_failure]`
+- FIFO immediate reward distribution
+- WINNER-based finalization reward
+- Negative tests (duplicate votes, early vote, late vote)
+- Balance verification and reward cap enforcement
 
 ---
 

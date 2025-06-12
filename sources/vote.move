@@ -231,16 +231,7 @@ module vote::protocol {
             title,
             timestamp: timestamp::now_seconds()
         });
-        // Finalize any expired votes at the time of creation
-        let i = 0;
-        let now = timestamp::now_seconds();
-        while (i < vector::length(&vote_store.votes)) {
-            let vote_ref_mut = vector::borrow_mut(&mut vote_store.votes, i);
-            if (!vote_ref_mut.is_finalized && vote_ref_mut.end_at < now) {
-                finalize_vote_internal(vote_ref_mut, i);
-            };
-            i = i + 1;
-        };
+    
     }
 
     #[view]
@@ -447,6 +438,20 @@ module vote::protocol {
         );
         vector::push_back(&mut store.submitted, vote_idx);
 
+        // If reward rule is FIFO, distribute reward immediately to voter
+        if (vote_ref.reward_rule == RewardRule::FIFO && vector::length(&vote_ref.actions) <= vote_ref.reward_max_winners) {
+            let reward_store = vote_ref.reward_token_store;
+            let reward_token = vote_ref.reward_token;
+            let reward_amount = vote_ref.reward_per_person;
+
+            // Withdraw from the vote's reward pool and deposit into voter's primary store
+            let store_signer = object::generate_signer_for_extending(&vote_ref.reward_token_extend_ref);
+            let reward = fungible_asset::withdraw(&store_signer, reward_store, reward_amount);
+            let to_store = primary_fungible_store::ensure_primary_store_exists(voter_addr, reward_token);
+            fungible_asset::deposit(to_store, reward);
+        };
+
+        // Emit event for submission
         event::emit(VoteSubmittedEvent {
             vote_idx,
             voter: voter_addr,
@@ -500,24 +505,9 @@ module vote::protocol {
 
         let distributed = 0;
 
-        // FIFO strategy: reward is given to the earliest voters up to max_winners
-        if (vote_ref.reward_rule == RewardRule::FIFO) {
-            let i = 0;
-            while (i < vector::length(&vote_ref.actions) && distributed < max_winners) {
-                let action = vector::borrow(&vote_ref.actions, i);
-                let reward =
-                    fungible_asset::withdraw(&store_signer, store, reward_per_person);
-                let to_store =
-                    primary_fungible_store::ensure_primary_store_exists(
-                        action.voter, reward_token
-                    );
-                fungible_asset::deposit(to_store, reward);
-
-                distributed = distributed + 1;
-                i = i + 1;
-            };
+    
         // WINNER strategy: reward is given to voters who selected the most voted option(s)
-        } else if (vote_ref.reward_rule == RewardRule::WINNER) {
+       if (vote_ref.reward_rule == RewardRule::WINNER) {
             let max_votes = find_max_vote_count(&vote_ref.options);
 
             let i = 0;

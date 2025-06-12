@@ -34,6 +34,17 @@ module tests::vote_test {
         (constructor, metadata)
     }
 
+    // Other test cases follow and are already well-structured and categorized
+    // No changes required in logic unless you want to refactor assertions or naming conventions
+    // Tests include:
+    // - Vote creation
+    // - Vote editing
+    // - FIFO immediate reward distribution
+    // - WINNER final reward distribution
+    // - Invalid scenarios (duplicate, early, late, invalid option)
+    // - View functions (get_vote_info, get_vote_option_actions)
+    // - Refund check on finalization
+
     #[test(creator = @vote, framework = @0x1)]
     fun test_create_vote_basic(creator: &signer, framework: &signer) {
         timestamp::set_time_has_started_for_testing(framework);
@@ -105,29 +116,27 @@ module tests::vote_test {
         assert!(creator_balance == 500, 212); // 1500 - 1000
     }
 
-    #[test(
-        admin = @vote, user1 = @0x2, user2 = @0x3, framework = @0x1
-    )]
+    #[test(admin = @vote, user1 = @0x2, user2 = @0x3, user3 = @0x4, framework = @0x1)]
     fun test_vote_submission_and_finish(
         admin: &signer,
         user1: &signer,
         user2: &signer,
+        user3: &signer,
         framework: &signer
     ) {
         timestamp::set_time_has_started_for_testing(framework);
         timestamp::update_global_time_for_test_secs(1);
-
         protocol::init(admin);
 
         let (constructor, token) = create_test_fungible_asset(admin);
 
         let mint_ref = fungible_asset::generate_mint_ref(&constructor);
-        let minted = fungible_asset::mint(&mint_ref, 200);
-        let store =
+        let minted = fungible_asset::mint(&mint_ref, 10);
+        let admin_store =
             primary_fungible_store::ensure_primary_store_exists(
                 signer::address_of(admin), token
             );
-        fungible_asset::deposit(store, minted);
+        fungible_asset::deposit(admin_store, minted);
 
         timestamp::update_global_time_for_test_secs(10);
 
@@ -140,18 +149,28 @@ module tests::vote_test {
             50, // end_at
             0, // reward_rule (0 = FIFO)
             token, // reward_token
-            2, // reward_per_person
-            100, // reward_max_winners
+            5, // reward_per_person
+            2, // reward_max_winners
             options // options
         );
-
         timestamp::update_global_time_for_test_secs(15);
+        protocol::submit_vote(user1, 0, 0); // should receive reward
+        protocol::submit_vote(user2, 0, 0); // should receive reward
+        protocol::submit_vote(user3, 0, 0); // should NOT receive reward
 
-        protocol::submit_vote(user1, 0, 0); // returns u64
-        protocol::submit_vote(user2, 0, 0);
+        // Check balances
+        let u1_store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(user1), token);
+        let u2_store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(user2), token);
+        let u3_store = primary_fungible_store::ensure_primary_store_exists(signer::address_of(user3), token);
+        let u1_bal = fungible_asset::balance(u1_store);
+        let u2_bal = fungible_asset::balance(u2_store);
+        let u3_bal = fungible_asset::balance(u3_store);
+        let admin_bal = fungible_asset::balance(admin_store);
 
-        timestamp::update_global_time_for_test_secs(21);
-        protocol::finalize_vote(admin, 0);
+        assert!(u1_bal == 5, 101);
+        assert!(u2_bal == 5, 102);
+        assert!(u3_bal == 0, 103); // overlimit no reward
+        assert!(admin_bal == 0, 104); // all 10 used
     }
 
     #[test(admin = @vote, framework = @0x1)]
